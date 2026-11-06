@@ -1,0 +1,191 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    
+    function hasRole(role) {
+      return isAuthenticated() && getUserData().role == role;
+    }
+
+    function isAdmin() {
+      return hasRole('ADMIN');
+    }
+
+    function isDoctor() {
+      return hasRole('DOCTOR');
+    }
+
+    function isStaff() {
+      return hasRole('STAFF');
+    }
+
+    function isPatient() {
+      return hasRole('PATIENT');
+    }
+
+    // ===============================================================
+    // USERS COLLECTION
+    // ===============================================================
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      // Allow creation during self-registration (role must default to PATIENT unless created by ADMIN)
+      allow create: if isAuthenticated() && (
+        isOwner(userId) && (request.resource.data.role == 'PATIENT' || isAdmin())
+      );
+      // Allow updates to personal profile fields, but restrict role and status changes to ADMIN only
+      allow update: if isAuthenticated() && (
+        isAdmin() || (
+          isOwner(userId) && 
+          request.resource.data.role == resource.data.role &&
+          request.resource.data.accountStatus == resource.data.accountStatus
+        )
+      );
+      allow delete: if isAdmin();
+    }
+
+    // ===============================================================
+    // PATIENTS COLLECTION
+    // ===============================================================
+    match /patients/{patientId} {
+      allow read: if isAuthenticated() && (
+        isAdmin() || isDoctor() || isStaff() || (isPatient() && resource.data.userId == request.auth.uid)
+      );
+      allow create: if isAuthenticated() && (isAdmin() || isDoctor() || isStaff());
+      allow update: if isAuthenticated() && (
+        isAdmin() || isDoctor() || isStaff() || (isPatient() && resource.data.userId == request.auth.uid)
+      );
+      allow delete: if isAdmin();
+    }
+
+    // ===============================================================
+    // DOCTORS & STAFF COLLECTIONS
+    // ===============================================================
+    match /doctors/{doctorId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() || (isAuthenticated() && resource.data.userId == request.auth.uid);
+    }
+
+    match /staff/{staffId} {
+      allow read: if isAuthenticated() && (isAdmin() || isDoctor() || isStaff());
+      allow write: if isAdmin();
+    }
+
+    // ===============================================================
+    // MEDICAL RECORDS COLLECTION (EHR)
+    // ===============================================================
+    match /medicalRecords/{recordId} {
+      // Patient can view ONLY their own records
+      // Doctor can view records of patients
+      // Admin can view for security compliance
+      // Staff CANNOT view sensitive medical records
+      allow read: if isAuthenticated() && (
+        isAdmin() || 
+        isDoctor() || 
+        (isPatient() && resource.data.patientId == request.auth.uid)
+      );
+      allow create: if isAuthenticated() && (isDoctor() || isAdmin());
+      allow update: if isAuthenticated() && (isDoctor() || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    // ===============================================================
+    // PRESCRIPTIONS COLLECTION
+    // ===============================================================
+    match /prescriptions/{prescriptionId} {
+      allow read: if isAuthenticated() && (
+        isAdmin() || 
+        isDoctor() || 
+        isStaff() ||
+        (isPatient() && resource.data.patientId == request.auth.uid)
+      );
+      allow create: if isAuthenticated() && (isDoctor() || isAdmin());
+      allow update: if isAuthenticated() && (isDoctor() || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    // ===============================================================
+    // LAB REPORTS COLLECTION
+    // ===============================================================
+    match /labReports/{reportId} {
+      allow read: if isAuthenticated() && (
+        isAdmin() || 
+        isDoctor() || 
+        (isPatient() && resource.data.patientId == request.auth.uid) ||
+        (isStaff() && resource.data.uploadedBy == request.auth.uid)
+      );
+      allow create: if isAuthenticated() && (isDoctor() || isStaff() || isAdmin());
+      allow update: if isAuthenticated() && (isDoctor() || isStaff() || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    // ===============================================================
+    // APPOINTMENTS COLLECTION
+    // ===============================================================
+    match /appointments/{appointmentId} {
+      allow read: if isAuthenticated() && (
+        isAdmin() || 
+        isDoctor() || 
+        isStaff() || 
+        (isPatient() && resource.data.patientId == request.auth.uid)
+      );
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() && (
+        isAdmin() || 
+        isDoctor() || 
+        isStaff() || 
+        (isPatient() && resource.data.patientId == request.auth.uid)
+      );
+      allow delete: if isAdmin() || isStaff();
+    }
+
+    // ===============================================================
+    // DOCUMENTS COLLECTION
+    // ===============================================================
+    match /documents/{documentId} {
+      allow read: if isAuthenticated() && (
+        isAdmin() || 
+        isDoctor() || 
+        (isPatient() && resource.data.patientId == request.auth.uid) ||
+        (isStaff() && 'STAFF' in resource.data.accessRoles)
+      );
+      allow create: if isAuthenticated() && (isDoctor() || isStaff() || isAdmin());
+      allow update: if isAuthenticated() && (isDoctor() || isStaff() || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    // ===============================================================
+    // AUDIT LOGS COLLECTION
+    // ===============================================================
+    match /auditLogs/{logId} {
+      // ONLY Admin can read audit logs
+      allow read: if isAdmin();
+      // Any authenticated user can create audit records for their own security events
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      // Audit logs MUST be immutable (No update, No delete)
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // ===============================================================
+    // NOTIFICATIONS COLLECTION
+    // ===============================================================
+    match /notifications/{notificationId} {
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+  }
+}

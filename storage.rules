@@ -1,0 +1,46 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    
+    // Global helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isSmallFile() {
+      // Max 10 MB limit for security and performance
+      return request.resource.size <= 10 * 1024 * 1024;
+    }
+
+    function isSupportedDocType() {
+      return request.resource.contentType.matches('application/pdf')
+          || request.resource.contentType.matches('image/png')
+          || request.resource.contentType.matches('image/jpeg')
+          || request.resource.contentType.matches('image/jpg');
+    }
+
+    // Profile photos repository
+    match /profile-photos/{userId}/{fileName} {
+      allow read: if isAuthenticated();
+      allow write: if isOwner(userId) && isSmallFile() && request.resource.contentType.matches('image/.*');
+    }
+
+    // Laboratory Reports storage
+    match /lab-reports/{patientId}/{fileName} {
+      allow read: if isAuthenticated(); // Application layer enforces patient/doctor authorization
+      allow create, update: if isAuthenticated() && isSmallFile() && isSupportedDocType();
+      allow delete: if isAuthenticated();
+    }
+
+    // Medical Documents repository
+    match /documents/{fileName} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() && isSmallFile() && isSupportedDocType();
+      allow delete: if isAuthenticated();
+    }
+  }
+}
